@@ -19,6 +19,22 @@ from mamba_ssm.ops.triton.layer_norm import _layer_norm_fwd
 
 import selective_scan_cuda
 
+@torch.library.custom_op("mamba_ssm::selective_scan_fwd", mutates_args={})
+def _selective_scan_fwd_op(
+    u: torch.Tensor,
+    delta: torch.Tensor,
+    A: torch.Tensor,
+    B: torch.Tensor,
+    C: torch.Tensor,
+    D: torch.Tensor | None,
+    z: torch.Tensor | None,
+    delta_bias: torch.Tensor | None,
+    delta_softplus: bool
+) -> list[torch.Tensor]:
+    return selective_scan_cuda.fwd(u, delta, A, B, C, D, z, delta_bias, delta_softplus)
+
+
+
 
 class SelectiveScanFn(torch.autograd.Function):
 
@@ -43,7 +59,7 @@ class SelectiveScanFn(torch.autograd.Function):
         if C.dim() == 3:
             C = rearrange(C, "b dstate l -> b 1 dstate l")
             ctx.squeeze_C = True
-        out, x, *rest = selective_scan_cuda.fwd(u, delta, A, B, C, D, z, delta_bias, delta_softplus)
+        out, x, *rest = _selective_scan_fwd_op(u, delta, A, B, C, D, z, delta_bias, delta_softplus)
         ctx.delta_softplus = delta_softplus
         ctx.has_z = z is not None
         last_state = x[:, :, -1, 1::2]  # (batch, dim, dstate)
@@ -260,7 +276,7 @@ class MambaInnerFn(torch.autograd.Function):
             delta = rms_norm_forward(delta, dt_rms_weight, bias=None, eps=b_c_dt_rms_eps)
             delta = rearrange(delta, "(b l) d -> b d l", l=L).contiguous()
         
-        out, scan_intermediates, out_z = selective_scan_cuda.fwd(
+        out, scan_intermediates, out_z = _selective_scan_fwd_op(
             conv1d_out, delta, A, B, C, D, z, delta_bias, delta_softplus
         )
         ctx.delta_softplus = delta_softplus
